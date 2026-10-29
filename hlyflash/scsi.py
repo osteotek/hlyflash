@@ -4,9 +4,9 @@ JieLi chips in USB download (UBOOT) mode present as a USB Mass Storage device
 and carry a vendor command set over custom SCSI CDBs. On Linux we can issue
 those CDBs directly to the /dev/sgN or /dev/sdX node via the SG_IO ioctl.
 
-macOS/Windows are not supported here: macOS claims mass-storage devices with
-its own driver and offers no comparable userspace passthrough, and Windows uses
-a different ioctl (SCSI_PASS_THROUGH_DIRECT). See README for the platform matrix.
+macOS/Windows are not supported by this backend. macOS needs a different
+transport, such as privileged USB capture plus libusb Bulk-Only Transport;
+Windows uses SCSI_PASS_THROUGH_DIRECT. See README for the platform matrix.
 """
 from __future__ import annotations
 
@@ -50,6 +50,23 @@ class _sg_io_hdr(ctypes.Structure):
 
 class SCSIError(Exception):
     pass
+
+
+class USBAccessError(SCSIError):
+    """USB access was denied before any device commands were sent."""
+
+
+class CommandFailed(SCSIError):
+    """The device rejected a command, but transport framing remains valid."""
+
+
+def open_device(node: str, location=None):
+    if node == "usb" or node.startswith("usb:"):
+        from .usb import USBDev
+        return USBDev(node, location=location) if location is not None else USBDev(node)
+    if location is not None:
+        raise ValueError("Physical device selection requires the USB backend")
+    return SCSIDev(node)
 
 
 class SCSIDev:
@@ -105,10 +122,13 @@ class SCSIDev:
 
         fcntl.ioctl(self.fd, SG_IO, hdr)
 
-        if hdr.status != 0 or hdr.host_status != 0:
-            raise SCSIError(
+        if hdr.status != 0 or hdr.host_status != 0 or hdr.driver_status != 0:
+            error = CommandFailed if hdr.status == 2 and not hdr.host_status else SCSIError
+            raise error(
                 f"SCSI status={hdr.status:#x} host={hdr.host_status:#x} "
                 f"driver={hdr.driver_status:#x} sense={sense.raw[:hdr.sb_len_wr].hex()}")
+        if hdr.resid != 0:
+            raise SCSIError(f"Incomplete SCSI transfer: residual {hdr.resid}/{dlen} bytes")
         if direction == SG_DXFER_FROM_DEV:
             return dbuf.raw[:dlen]
         return b""

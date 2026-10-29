@@ -7,10 +7,16 @@ license = { text = "MIT" }
 authors = [{ name = "Arthur Tazhitdinov" }]
 keywords = ["jieli", "ac632n", "ac636n", "hanlinyue", "page-turner", "firmware", "ufw"]
 requires-python = ">=3.9"
-dependencies = []
+dependencies = [
+    "pyserial>=3.5",
+    "pyusb>=1.2",
+    "libusb-package>=1.0.30,<2",
+]
 
 [project.optional-dependencies]
-serial = ["pyserial>=3.5"]
+# Retain the old extras so existing install commands keep working.
+serial = []
+usb = []
 
 [project.scripts]
 hlyflash = "hlyflash.cli:main"
@@ -18,6 +24,12 @@ hlyflash = "hlyflash.cli:main"
 [build-system]
 requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["hlyflash", "hlyflash.data"]
+
+[tool.setuptools.package-data]
+"hlyflash.data" = ["*.bin", "*.md", "*.txt", "*.rules"]
 
 [project.urls]
 Homepage = "https://github.com/osteotek/hlyflash"

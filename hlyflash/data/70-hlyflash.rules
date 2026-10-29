@@ -1,0 +1,5 @@
+# Managed by hlyflash setup.
+# Hanlinyue page turners: grant the active local user access to USB and CDC serial.
+# Keep this file before 73-seat-late.rules so logind applies the uaccess ACL.
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="4c4a", ATTR{idProduct}=="4155", MODE="0660", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="4c4a", ATTRS{idProduct}=="4155", MODE="0660", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1", ENV{ID_MM_PORT_IGNORE}="1"

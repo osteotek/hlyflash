@@ -1,13 +1,14 @@
 """Safe, read-only access to a Hanlinyue page turner in normal (app) mode.
 
-In normal mode the device is a USB CDC serial port speaking line-delimited
+In normal mode the device is a USB CDC serial port speaking a stream of
 JSON at 460800 baud: you send {"o":"get","t":<field>} and it answers
 {"o":"getresult","t":<field>,"v":<value>}. This module only ever issues
 `get` queries -- it never writes settings or firmware.
 """
 from __future__ import annotations
 
-import glob
+import codecs
+import errno
 import json
 import sys
 import time
@@ -19,19 +20,36 @@ USB_PID = 0x4155
 FIELDS = ("model", "firmware", "mac", "battery")
 
 
+class _JSONStream:
+    """Decode complete JSON values, with or without newline separators."""
+
+    def __init__(self):
+        self.buffer = ""
+        self.text_decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        self.json_decoder = json.JSONDecoder()
+
+    def feed(self, chunk: bytes):
+        self.buffer += self.text_decoder.decode(chunk)
+        while self.buffer:
+            self.buffer = self.buffer.lstrip()
+            if not self.buffer:
+                break
+            try:
+                msg, end = self.json_decoder.raw_decode(self.buffer)
+            except json.JSONDecodeError:
+                if "\n" in self.buffer:
+                    _, self.buffer = self.buffer.split("\n", 1)
+                    continue
+                break  # incomplete value; retain it for the next read
+            self.buffer = self.buffer[end:]
+            yield msg
+
+
 def find_ports() -> list[str]:
-    """Best-effort list of candidate serial device paths for this platform."""
-    pats = []
-    if sys.platform == "darwin":
-        pats = ["/dev/cu.usbmodem*"]
-    elif sys.platform.startswith("linux"):
-        pats = ["/dev/ttyACM*", "/dev/ttyUSB*"]
-    else:
-        pats = ["COM*"]
-    out: list[str] = []
-    for p in pats:
-        out.extend(sorted(glob.glob(p)))
-    return out
+    """Find page turners without probing unrelated serial devices."""
+    from serial.tools import list_ports
+    return sorted({port.device for port in list_ports.comports()
+                   if (port.vid, port.pid) == (USB_VID, USB_PID)})
 
 
 def query(port: str, fields=FIELDS, timeout: float = 1.2, rounds: int = 3) -> dict:
@@ -44,10 +62,20 @@ def query(port: str, fields=FIELDS, timeout: float = 1.2, rounds: int = 3) -> di
     """
     import serial  # pyserial; imported lazily so parsing works without it
 
+    fields = tuple(fields)
+    if not fields:
+        return {}
     want = set(fields)
     got: dict[str, str] = {}
+    stream = _JSONStream()
 
-    s = serial.Serial(port, BAUD, timeout=0.3)
+    try:
+        s = serial.Serial(port, BAUD, timeout=0.3)
+    except OSError as error:
+        if sys.platform.startswith("linux") and error.errno in (errno.EACCES, errno.EPERM):
+            raise PermissionError(f"Cannot open {port}: permission denied. Run hlyflash setup, "
+                                  "unplug/reconnect the device, then retry. For SSH use setup --group GROUP") from error
+        raise
     try:
         time.sleep(0.5)
         s.reset_input_buffer()
@@ -56,21 +84,13 @@ def query(port: str, fields=FIELDS, timeout: float = 1.2, rounds: int = 3) -> di
             """Send one get and read until its reply arrives or `timeout`."""
             s.write(json.dumps({"o": "get", "t": t}).encode())
             s.flush()
-            deadline = time.time() + timeout
-            buf = b""
-            while time.time() < deadline:
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
                 chunk = s.read(256)
                 if not chunk:
                     continue
-                buf += chunk
-                while b"\n" in buf:
-                    line, buf = buf.split(b"\n", 1)
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        msg = json.loads(line)
-                    except Exception:
+                for msg in stream.feed(chunk):
+                    if not isinstance(msg, dict) or msg.get("o") != "getresult":
                         continue
                     mt = msg.get("t")
                     if mt in want and msg.get("v") is not None:

@@ -11,11 +11,13 @@ Opcode families: 0xFB = write/erase, 0xFC = control/query, 0xFD = read.
 """
 from __future__ import annotations
 
-from .enc import crc16
+from .enc import crc16, crc_decode
 from .scsi import SCSIDev, SCSIError
 
 
 def _cdb(opcode: int, args: bytes = b"") -> bytes:
+    if len(args) > 14:
+        raise ValueError("JieLi command arguments exceed 14 bytes")
     cdb = opcode.to_bytes(2, "big") + args
     if len(cdb) < 16:
         cdb += b"\xff" * (16 - len(cdb))
@@ -39,6 +41,7 @@ class Loader:
     ONLINE_DEVICE = 0xFC0A
     READ_ID = 0xFC0B
     RUN_APP = 0xFC0C
+    USB_BUFFER_SIZE = 0xFC14
 
     def __init__(self, dev: SCSIDev):
         self.dev = dev
@@ -46,6 +49,8 @@ class Loader:
     # --- transport helpers ---
     def _resp(self, opcode: int, args: bytes = b"", check: bool = True) -> bytes:
         r = self.dev.execute(_cdb(opcode, args), None, 16)
+        if len(r) != 16:
+            raise SCSIError(f"short response for {opcode:#06x}: {len(r)}/16 bytes")
         if check and int.from_bytes(r[:2], "big") != opcode:
             raise SCSIError(f"response opcode {r[:2].hex()} != {opcode:#06x}")
         return r[2:]
@@ -60,6 +65,8 @@ class Loader:
     def inquiry(self) -> tuple[str, str, str]:
         data = self.dev.execute(
             bytes([0x12, 0, 0]) + (36).to_bytes(2, "big") + bytes([0]), None, 36)
+        if len(data) != 36:
+            raise SCSIError("Incomplete SCSI INQUIRY")
         return (data[8:16].decode("ascii", "replace").strip(),
                 data[16:32].decode("ascii", "replace").strip(),
                 data[32:36].decode("ascii", "replace").strip())
@@ -77,24 +84,51 @@ class Loader:
         return self._resp(self.READ_STATUS)[0]
 
     def flash_read(self, addr: int, length: int) -> bytes:
-        return self._datain(
+        _range(addr, length)
+        data = self._datain(
             self.READ_FLASH,
             addr.to_bytes(4, "big") + length.to_bytes(2, "big"), length)
+        if len(data) != length:
+            raise SCSIError(f"Short flash read at {addr:#x}: {len(data)}/{length}")
+        return data
+
+    def chip_key(self) -> int:
+        r = self._resp(self.READ_KEY, (0xAC6900).to_bytes(4, "big"))
+        return int.from_bytes(crc_decode(r[4:6][::-1]), "little")
+
+    def usb_buffer_size(self) -> int:
+        return int.from_bytes(self._resp(self.USB_BUFFER_SIZE)[:4], "big")
 
     # --- destructive: upload stub / write flash (EXPERIMENTAL, see flasher) ---
-    def mem_write(self, addr: int, data: bytes) -> None:
+    def mem_write(self, addr: int, data: bytes, crc_data: bytes | None = None) -> None:
+        _range(addr, len(data))
+        # The vendor ROM uploader clears reserved CDB bytes. Retain a nonzero
+        # final nonce byte, as the vendor's plain SCSI wrapper does.
+        args = (addr.to_bytes(4, "big") + len(data).to_bytes(2, "big")
+                + b"\x00" + crc16(data if crc_data is None else crc_data).to_bytes(2, "little"))
         self._dataout(
-            self.WRITE_MEM,
-            addr.to_bytes(4, "big") + len(data).to_bytes(2, "big")
-            + b"\x00" + crc16(data).to_bytes(2, "little"), data)
+            self.WRITE_MEM, args.ljust(13, b"\x00") + b"\xff", data)
+
+    def mem_read(self, addr: int, length: int) -> bytes:
+        _range(addr, length)
+        data = self._datain(self.READ_MEM,
+                           (addr.to_bytes(4, "big") + length.to_bytes(2, "big"))
+                           .ljust(13, b"\x00") + b"\xff", length)
+        if len(data) != length:
+            raise SCSIError("Short RAM readback")
+        return data
 
     def mem_jump(self, addr: int, arg: int = 0) -> None:
-        self._resp(self.JUMP, addr.to_bytes(4, "big") + arg.to_bytes(2, "big"))
+        self._resp(self.JUMP, (addr.to_bytes(4, "big") + arg.to_bytes(2, "big"))
+                   .ljust(13, b"\x00") + b"\xff")
 
     def flash_erase_sector(self, addr: int) -> None:
+        if addr < 0 or addr > 0xFFFFFFFF or addr % 4096:
+            raise ValueError("Erase address must be a nonnegative 4 KiB boundary")
         self._resp(self.ERASE_SECTOR, addr.to_bytes(4, "big"))
 
     def flash_write(self, addr: int, data: bytes) -> None:
+        _range(addr, len(data))
         self._dataout(
             self.WRITE_FLASH,
             addr.to_bytes(4, "big") + len(data).to_bytes(2, "big")
@@ -106,3 +140,10 @@ class Loader:
 
 def is_uboot_product(product: str) -> bool:
     return product.upper().startswith("UBOOT")
+
+
+def _range(address, length):
+    if not 0 <= address <= 0xFFFFFFFF or not 1 <= length <= 0xFFFF:
+        raise ValueError("Invalid JieLi address or transfer length")
+    if address + length > 0x100000000:
+        raise ValueError("Transfer exceeds the address space")

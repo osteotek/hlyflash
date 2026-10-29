@@ -21,7 +21,7 @@ against a real AB7ELJ.ufw:
 
 The payloads are stored in the clear in the file; the main one, "flash.bin",
 is the chip flash image. (The flash image itself has an inner per-0x20-block
-ENC layer, handled only by the flasher, not needed to validate the container.)
+ENC layer; container validation does not decode the flash image itself.)
 """
 from __future__ import annotations
 
@@ -80,6 +80,12 @@ def parse(raw: bytes) -> Ufw:
     chip = _cstr(hdr[0x10:0x40])
     header_crc_ok = crc16(hdr[2:]) == hdr_crc
 
+    if total != len(raw):
+        raise ValueError(f"UFW size mismatch: header declares {total}, file has {len(raw)} bytes")
+    table_end = HEADER_LEN + count * ENTRY_LEN
+    if not count or table_end > len(raw):
+        raise ValueError("Missing or truncated UFW entry table")
+
     table_raw = raw[HEADER_LEN:HEADER_LEN + count * ENTRY_LEN]
     table_crc_ok = crc16(table_raw) == table_crc
 
@@ -90,6 +96,10 @@ def parse(raw: bytes) -> Ufw:
         (ecrc,) = struct.unpack_from("<H", rec, 4)
         eoff, esize = struct.unpack_from("<II", rec, 8)
         name = _cstr(rec[0x40:0x50])
+        if not name or any(e.name == name for e in entries):
+            raise ValueError(f"Empty or duplicate UFW entry name: {name!r}")
+        if esize and (eoff < table_end or eoff + esize > len(raw)):
+            raise ValueError(f"UFW payload {name!r} is outside the file or overlaps its table")
         entries.append(UfwEntry(i, etype, ecrc, eoff, esize, name))
 
     return Ufw(

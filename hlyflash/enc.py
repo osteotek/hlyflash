@@ -54,3 +54,14 @@ def enc_bytes(data: bytes, key: int) -> bytes:
     b = bytearray(data)
     enc(b, key)
     return bytes(b)
+
+
+def crc_decode(data: bytes, key: int = 0xFFFFFFFF) -> bytes:
+    """JieLi CrcDecode/MengLi XOR stream used by ROM uploads and chip keys."""
+    magic = bytes.fromhex("c3cfc0e8ced2b0aec4e3a3acd3f1c1d6")
+    state = crc16((key >> 16).to_bytes(2, "little"), key & 0xFFFF)
+    out = bytearray(data)
+    for i in range(len(out)):
+        state = crc16(magic[i % len(magic):i % len(magic) + 1], state)
+        out[i] ^= state & 0xFF
+    return bytes(out)

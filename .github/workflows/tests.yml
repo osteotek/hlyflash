@@ -1,0 +1,31 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+        python: ['3.9', '3.13']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install with default dependencies
+        run: python -m pip install .
+      - name: Check installed CLI
+        run: |
+          hlyflash --version
+          hlyflash doctor
+          hlyflash setup --print-rules
+      - name: Run protocol and flash simulation tests
+        run: python -m unittest discover -s tests -v
