@@ -6,3 +6,7 @@ venv/
 build/
 dist/
 .DS_Store
+
+# Reverse-engineering artifacts: kept locally for reference, never published.
+# Contains vendor-proprietary binaries/firmware/decompiled code — do not commit.
+reverse-engineering/
