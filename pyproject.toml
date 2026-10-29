@@ -1,0 +1,23 @@
+[project]
+name = "hlyflash"
+version = "0.1.0"
+description = "CLI tools for Hanlinyue / JieLi AC632N Bluetooth page turners"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Arthur Tazhitdinov" }]
+keywords = ["jieli", "ac632n", "hanlinyue", "page-turner", "firmware", "ufw"]
+requires-python = ">=3.9"
+dependencies = []
+
+[project.optional-dependencies]
+serial = ["pyserial>=3.5"]
+
+[project.scripts]
+hlyflash = "hlyflash.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project.urls]
+Homepage = "https://github.com/osteotek/hlyflash"
