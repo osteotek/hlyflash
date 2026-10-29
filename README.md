@@ -1,5 +1,10 @@
 # hlyflash
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/)
+[![Platform: macOS | Linux](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](#what-works-where)
+[![Models: Free 2 · Free 3 · Free 2 2026 · E1 Pro](https://img.shields.io/badge/models-Free%202%20%C2%B7%20Free%203%20%C2%B7%20Free%202%202026%20%C2%B7%20E1%20Pro-green.svg)](#)
+
 Command-line tools for **Hanlinyue** Bluetooth page turners (Free 2 / Free 3 /
 Free 2 2026 / E1 Pro), which are built on **JieLi AC632N / AC636N** chips. The
 vendor only ships a Windows firmware updater; the macOS app deliberately
@@ -8,6 +13,8 @@ with these devices from macOS and Linux.
 
 It was produced by reverse-engineering the vendor's own tools **for
 interoperability / educational purposes**, on hardware the user owns.
+
+![hlyflash demo: list commands, download and verify firmware, inspect a .ufw](assets/demo.gif)
 
 ## What works where
 
