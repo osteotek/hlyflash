@@ -1,0 +1,145 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing version tag (leave blank for a build-only check of the selected ref)'
+        type: string
+        default: ''
+      publish:
+        description: 'Publish a GitHub Release for the existing tag'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+      PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Install build tools
+        run: python -m pip install --upgrade build
+      - name: Validate release version
+        id: version
+        run: |
+          python - <<'PY'
+          import ast
+          import os
+          from pathlib import Path
+          import tomllib
+          from packaging.version import Version
+
+          version = tomllib.loads(Path('pyproject.toml').read_text())['project']['version']
+          parsed = Version(version)
+          module = ast.parse(Path('hlyflash/__init__.py').read_text())
+          runtime = next(ast.literal_eval(node.value) for node in module.body
+                         if isinstance(node, ast.Assign) and any(
+                             isinstance(target, ast.Name) and target.id == '__version__'
+                             for target in node.targets))
+          if runtime != version:
+              raise SystemExit('pyproject.toml and hlyflash.__version__ must match')
+          supplied = os.environ.get('RELEASE_TAG', '')
+          tag = supplied or f'v{version}'
+          if tag != f'v{version}':
+              raise SystemExit(f'Tag {tag!r} must match package version v{version}')
+          if os.environ['PUBLISH'] == 'true' and not supplied:
+              raise SystemExit('Publishing requires an existing version tag')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'tag={tag}\n')
+              output.write(f'prerelease={str(parsed.is_prerelease or parsed.is_devrelease).lower()}\n')
+          print(f'Release version: {tag}')
+          PY
+      - name: Build wheel and source archive
+        run: python -m build
+      - name: Install the wheel and check packaged resources
+        run: |
+          python -m pip install dist/*.whl
+          python -I - <<'PY'
+          import hashlib
+          from importlib.resources import files
+          from hlyflash.flasher import PROFILES
+
+          root = files('hlyflash')
+          profile = PROFILES['BR25']
+          loader = root.joinpath(profile['resource']).read_bytes()
+          if hashlib.sha256(loader).hexdigest() != profile['sha256']:
+              raise SystemExit('Bundled BR25 loader failed hash verification')
+          for name in ('LICENSE.jl-uboot-tool.txt', 'NOTICE.md', '70-hlyflash.rules'):
+              if not root.joinpath('data', name).read_bytes():
+                  raise SystemExit(f'Missing packaged resource: {name}')
+          print('Installed loader, license, notice and Linux rules verified')
+          PY
+          hlyflash doctor
+          hlyflash setup --print-rules
+      - name: Test the installed package
+        run: |
+          python -I - <<'PY'
+          from pathlib import Path
+          import unittest
+          suite = unittest.defaultTestLoader.discover(str(Path('tests').resolve()))
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          raise SystemExit(not result.wasSuccessful())
+          PY
+      - name: Create checksums
+        run: |
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          import tarfile
+          import zipfile
+
+          root = Path('dist')
+          wheel, = root.glob('*.whl')
+          source, = root.glob('*.tar.gz')
+          with zipfile.ZipFile(wheel) as archive:
+              names = archive.namelist()
+          with tarfile.open(source) as archive:
+              names += archive.getnames()
+          if any('reverse-engineering/' in name or '/.venv/' in name for name in names):
+              raise SystemExit('Distribution contains local-only artifacts')
+          checksums = ''.join(f'{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n'
+                              for path in sorted((wheel, source)))
+          (root / 'SHA256SUMS').write_text(checksums)
+          print(checksums, end='')
+          PY
+      - name: Save distributions for review
+        uses: actions/upload-artifact@v7
+        with:
+          name: hlyflash-${{ steps.version.outputs.tag }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Publish GitHub Release
+        if: env.PUBLISH == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.version.outputs.tag }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+        run: |
+          flags=()
+          if [[ "$PRERELEASE" == 'true' ]]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "$TAG" dist/*.whl dist/*.tar.gz dist/SHA256SUMS \
+            --verify-tag --title "hlyflash $TAG" --generate-notes "${flags[@]}"

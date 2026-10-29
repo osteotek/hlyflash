@@ -35,6 +35,15 @@ libusb package is not required. hlyflash prefers an existing system libusb and
 falls back to the packaged library. Availability on uncommon platforms depends
 on the dependency's wheels; `doctor` checks that a library actually loads.
 
+## Install a release package
+
+When a version is published on [GitHub Releases](https://github.com/osteotek/hlyflash/releases),
+download its wheel and install it with `uv tool install ./hlyflash-VERSION-py3-none-any.whl`.
+The release also includes a source archive and `SHA256SUMS`. For verification,
+place both distributions and `SHA256SUMS` in the same directory and run
+`sha256sum -c SHA256SUMS` on Linux or `shasum -a 256 -c SHA256SUMS` on macOS.
+Then run `hlyflash doctor` as with a source installation.
+
 ## Linux permissions
 
 After installation, run `hlyflash setup` once. It requests sudo to install

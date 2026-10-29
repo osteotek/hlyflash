@@ -51,6 +51,10 @@ directory. `pipx install .` also works. See [installation and troubleshooting](I
 for PATH fixes, upgrades, removal and development, and [Linux setup](LINUX.md)
 for headless permissions and device selection.
 
+Maintainers can publish versioned wheels and source archives with the
+[release workflow](.github/workflows/release.yml); see [RELEASING.md](RELEASING.md)
+for tagging, build-only checks and checksum verification.
+
 ![hlyflash demo: list commands, download and verify firmware, inspect a .ufw](assets/demo.gif)
 
 ## What works where
