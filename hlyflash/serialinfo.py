@@ -34,15 +34,26 @@ def find_ports() -> list[str]:
     return out
 
 
-def query(port: str, fields=FIELDS, timeout: float = 1.2) -> dict:
+def query(port: str, fields=FIELDS, timeout: float = 1.2, rounds: int = 3) -> dict:
+    """Query the device for `fields` and return {field: value}.
+
+    The device drops commands sent in the brief warm-up window right after the
+    port opens, so we settle, send a throwaway query, then poll each field with
+    a generous per-field deadline and retry any that are still missing. Replies
+    are matched by their own `t` field, not send order.
+    """
     import serial  # pyserial; imported lazily so parsing works without it
 
-    s = serial.Serial(port, BAUD, timeout=0.4)
+    want = set(fields)
+    got: dict[str, str] = {}
+
+    s = serial.Serial(port, BAUD, timeout=0.3)
     try:
-        time.sleep(0.3)
+        time.sleep(0.5)
         s.reset_input_buffer()
-        got: dict[str, str] = {}
-        for t in fields:
+
+        def ask(t: str) -> None:
+            """Send one get and read until its reply arrives or `timeout`."""
             s.write(json.dumps({"o": "get", "t": t}).encode())
             s.flush()
             deadline = time.time() + timeout
@@ -52,7 +63,8 @@ def query(port: str, fields=FIELDS, timeout: float = 1.2) -> dict:
                 if not chunk:
                     continue
                 buf += chunk
-                for line in buf.split(b"\n"):
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
                     line = line.strip()
                     if not line:
                         continue
@@ -60,11 +72,20 @@ def query(port: str, fields=FIELDS, timeout: float = 1.2) -> dict:
                         msg = json.loads(line)
                     except Exception:
                         continue
-                    if msg.get("t") == t and msg.get("v") is not None:
-                        got[t] = msg["v"]
+                    mt = msg.get("t")
+                    if mt in want and msg.get("v") is not None:
+                        got[mt] = msg["v"]
                 if t in got:
-                    break
-            time.sleep(0.1)
+                    return
+            time.sleep(0.15)  # pace commands; the device drops back-to-back ones
+
+        ask(fields[-1])  # throwaway: flush the device's warm-up drop window
+        for _ in range(rounds):
+            for t in fields:
+                if t not in got:
+                    ask(t)
+            if want <= got.keys():
+                break
         return got
     finally:
         s.close()
